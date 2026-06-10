@@ -86,12 +86,18 @@ def load_data():
     return df
 
 # ─── HELPER FUNCTIONS ────────────────────────────────────────────────────────
-def get_pagu(df, seksi, tahun):
-    sub = df[(df['Seksi']==seksi) & (df['Tahun']==tahun)]
+def get_pagu(df, seksi, tahun, bulan_idx=None):
+    """Ambil pagu — jika pagu bisa direvisi, pakai bulan terakhir atau s/d bulan_idx."""
+    sub = df[(df['Seksi']==seksi) & (df['Tahun']==tahun)].copy()
     if sub.empty:
         return 0
-    # pagu is same for all months, take first
-    row = sub.iloc[0]
+    sub['_idx'] = sub['Bulan'].apply(lambda b: BULAN.index(b) if b in BULAN else -1)
+    sub = sub[sub['_idx'] >= 0].sort_values('_idx')
+    if bulan_idx is not None:
+        sub = sub[sub['_idx'] <= bulan_idx]
+        if sub.empty:
+            return 0
+    row = sub.iloc[-1]  # pagu bulan terakhir (revisi terakhir)
     return int(row['Pagu PNBP (Rp)'] + row['Pagu RM PTSL (Rp)'] + row['Pagu RM Non-PTSL (Rp)'])
 
 def get_pct_bulanan(df, seksi, tahun):
@@ -129,8 +135,8 @@ def get_delta(pct):
     return delta
 
 def get_sisa(df, seksi, tahun, sampai_idx):
-    """TotalReal adalah kumulatif — ambil nilai bulan terakhir yang ada s/d sampai_idx."""
-    pagu = get_pagu(df, seksi, tahun)
+    """TotalReal adalah kumulatif — ambil nilai bulan terakhir s/d sampai_idx, pagu juga s/d saat itu."""
+    pagu = get_pagu(df, seksi, tahun, bulan_idx=sampai_idx)
     total_real = 0
     # cari bulan terakhir yang ada data dari 0..sampai_idx
     for i in range(sampai_idx, -1, -1):
@@ -155,7 +161,7 @@ def get_dashboard_summary(df, tahun):
     total_pagu = 0
     total_real = 0
     for s in SEKSI_LIST:
-        pagu = get_pagu(df, s, tahun)
+        pagu = get_pagu(df, s, tahun)  # ambil pagu bulan terakhir (sudah revisi)
         # TotalReal adalah kumulatif — ambil bulan terakhir yang ada datanya
         sub = df[(df['Seksi']==s) & (df['Tahun']==tahun)].copy()
         sub['_bulan_idx'] = sub['Bulan'].apply(lambda b: BULAN.index(b) if b in BULAN else -1)
@@ -274,7 +280,9 @@ with st.sidebar:
 if halaman == "🏠 Dashboard":
     st.markdown("<h4 style='color:#1a3a6b;font-weight:800;margin-bottom:24px'>🏠 Dashboard — Ringkasan Anggaran</h4>", unsafe_allow_html=True)
 
-    tahun_ref = 2025
+    tahun_list_db = sorted(df['Tahun'].unique().tolist(), reverse=True)
+    tahun_ref = st.selectbox("📅 Pilih Tahun", tahun_list_db, index=0,
+                              key='db_tahun')
     summary = get_dashboard_summary(df, tahun_ref)
 
     # ── Stat Cards ──
@@ -598,31 +606,6 @@ elif halaman == "📈 Analisis & Proyeksi":
             height=420, font=dict(family='Segoe UI')
         )
         st.plotly_chart(fig_tren, use_container_width=True, config={'displayModeBar':False})
-
-        # Heatmap
-        st.markdown("### 🔥 Heatmap Pola Realisasi Bulanan (2018–2025)")
-        tahun_hist = list(range(2018,2026))
-        z_data = []
-        for s in SEKSI_LIST:
-            row_vals = []
-            for t in tahun_hist:
-                pct = get_pct_bulanan(df, s, t)
-                row_vals.append(round(sum(pct)/len([p for p in pct if p>0]) if any(p>0 for p in pct) else 0, 1))
-            z_data.append(row_vals)
-
-        fig_heat = go.Figure(go.Heatmap(
-            z=z_data, x=tahun_hist, y=SEKSI_LIST,
-            colorscale=[[0,'#fff0f0'],[0.5,'#ffd580'],[1,'#1a3a6b']],
-            text=[[f"{v:.1f}%" for v in row] for row in z_data],
-            texttemplate='%{text}',
-            hovertemplate='Seksi %{y}<br>Tahun %{x}<br>Rata-rata: %{z:.1f}%<extra></extra>'
-        ))
-        fig_heat.update_layout(
-            margin=dict(t=20,b=40,l=60,r=80),
-            paper_bgcolor='rgba(0,0,0,0)',
-            height=300, font=dict(family='Segoe UI')
-        )
-        st.plotly_chart(fig_heat, use_container_width=True, config={'displayModeBar':False})
 
         # Tabel tren
         st.markdown("**📋 Data Tren Realisasi Tahunan (%)**")
