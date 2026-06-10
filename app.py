@@ -95,17 +95,24 @@ def get_pagu(df, seksi, tahun):
     return int(row['Pagu PNBP (Rp)'] + row['Pagu RM PTSL (Rp)'] + row['Pagu RM Non-PTSL (Rp)'])
 
 def get_pct_bulanan(df, seksi, tahun):
+    """% realisasi per bulan (non-kumulatif) — dihitung dari selisih kumulatif antar bulan."""
     pagu = get_pagu(df, seksi, tahun)
     if pagu == 0:
         return [0]*11
-    hasil = []
+    kum_rp = []
     for bln in BULAN:
         sub = df[(df['Seksi']==seksi) & (df['Tahun']==tahun) & (df['Bulan']==bln)]
-        if sub.empty:
-            hasil.append(0)
+        kum_rp.append(int(sub.iloc[0]['TotalReal']) if not sub.empty else 0)
+    # Non-kumulatif: selisih antar bulan
+    hasil = []
+    prev = 0
+    for val in kum_rp:
+        if val > 0:
+            delta = val - prev
+            hasil.append(round(delta / pagu * 100, 4))
+            prev = val
         else:
-            r = sub.iloc[0]['TotalReal']
-            hasil.append(round(r / pagu * 100, 4))
+            hasil.append(0)
     return hasil
 
 def get_kumulatif(pct):
@@ -122,13 +129,16 @@ def get_delta(pct):
     return delta
 
 def get_sisa(df, seksi, tahun, sampai_idx):
+    """TotalReal adalah kumulatif — ambil nilai bulan terakhir yang ada s/d sampai_idx."""
     pagu = get_pagu(df, seksi, tahun)
     total_real = 0
-    for i in range(sampai_idx + 1):
+    # cari bulan terakhir yang ada data dari 0..sampai_idx
+    for i in range(sampai_idx, -1, -1):
         bln = BULAN[i]
         sub = df[(df['Seksi']==seksi) & (df['Tahun']==tahun) & (df['Bulan']==bln)]
         if not sub.empty:
-            total_real += int(sub.iloc[0]['TotalReal'])
+            total_real = int(sub.iloc[0]['TotalReal'])
+            break
     sisa = pagu - total_real
     pct_real = round(total_real / pagu * 100, 2) if pagu > 0 else 0
     sisa_pct = round(sisa / pagu * 100, 2) if pagu > 0 else 0
@@ -146,9 +156,11 @@ def get_dashboard_summary(df, tahun):
     total_real = 0
     for s in SEKSI_LIST:
         pagu = get_pagu(df, s, tahun)
-        # Realisasi kumulatif (all months)
-        sub = df[(df['Seksi']==s) & (df['Tahun']==tahun)]
-        real_rp = int(sub['TotalReal'].sum()) if not sub.empty else 0
+        # TotalReal adalah kumulatif — ambil bulan terakhir yang ada datanya
+        sub = df[(df['Seksi']==s) & (df['Tahun']==tahun)].copy()
+        sub['_bulan_idx'] = sub['Bulan'].apply(lambda b: BULAN.index(b) if b in BULAN else -1)
+        sub = sub[sub['_bulan_idx'] >= 0].sort_values('_bulan_idx')
+        real_rp = int(sub.iloc[-1]['TotalReal']) if not sub.empty else 0
         pct = round(real_rp / pagu * 100, 2) if pagu > 0 else 0
         per_seksi[s] = {
             'nama': SEKSI_NAMA[s],
